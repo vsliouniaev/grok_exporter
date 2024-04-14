@@ -16,12 +16,14 @@ package tailer
 
 import (
 	"fmt"
-	"github.com/fstab/grok_exporter/tailer/fswatcher"
-	"github.com/sirupsen/logrus"
 	"math/rand"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/fstab/grok_exporter/tailer/fswatcher"
+	"github.com/sirupsen/logrus"
 )
 
 const nTestLines = 10000
@@ -67,10 +69,10 @@ func TestLineBufferSequential_withMetrics(t *testing.T) {
 	if stillOpen {
 		t.Error("Source tailer was not closed.")
 	}
-	if !metric.startCalled {
+	if !metric.startCalled.Load() {
 		t.Error("metric.Start() not called.")
 	}
-	if !metric.stopCalled {
+	if !metric.stopCalled.Load() {
 		t.Error("metric.Stop() not called.")
 	}
 	// The peak load should be 1 or two less than nTestLines, depending on how quick
@@ -122,10 +124,10 @@ func TestLineBufferParallel_withMetrics(t *testing.T) {
 	if stillOpen {
 		t.Error("Source tailer was not closed.")
 	}
-	if !metric.startCalled {
+	if !metric.startCalled.Load() {
 		t.Error("metric.Register() not called.")
 	}
-	if !metric.stopCalled {
+	if !metric.stopCalled.Load() {
 		t.Error("metric.Unregister() not called.")
 	}
 	// Should be much less than nTestLines, because consumer and producer work in parallel.
@@ -133,30 +135,40 @@ func TestLineBufferParallel_withMetrics(t *testing.T) {
 }
 
 type peakLoadMetric struct {
-	startCalled, stopCalled bool
+	startCalled, stopCalled atomic.Bool
+	mx                      sync.RWMutex
 	peakLoad                int64
-	currentLoad             int64
+	currentLoad             atomic.Int64
 }
 
 func (m *peakLoadMetric) Start() {
-	m.startCalled = true
+	m.startCalled.Store(true)
 }
 
 func (m *peakLoadMetric) Inc() {
-	m.currentLoad++
-	if m.peakLoad < m.currentLoad {
-		m.peakLoad = m.currentLoad
+	m.currentLoad.Add(1)
+	m.mx.RLock()
+	cur := m.currentLoad.Load()
+	if m.peakLoad < cur {
+		m.mx.RUnlock()
+		m.mx.Lock()
+		if m.peakLoad < cur {
+			m.peakLoad = cur
+		}
+		m.mx.Unlock()
+	} else {
+		m.mx.RUnlock()
 	}
 }
 
 func (m *peakLoadMetric) Dec() {
-	m.currentLoad--
+	m.currentLoad.Add(-1)
 }
 
 func (m *peakLoadMetric) Set(value int64) {
-	m.currentLoad = value
+	m.currentLoad.Store(value)
 }
 
 func (m *peakLoadMetric) Stop() {
-	m.stopCalled = true
+	m.stopCalled.Store(true)
 }
