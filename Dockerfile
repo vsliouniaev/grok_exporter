@@ -1,4 +1,4 @@
-FROM golang:bullseye as builder
+FROM golang as builder
 
 #------------------------------------------------------------------------------
 # Create a statically linked Oniguruma library for Linux amd64
@@ -22,10 +22,12 @@ COPY . .
 RUN ls /usr/local/lib/libonig.a
 ENV CGO_LDFLAGS=/usr/local/lib/libonig.a
 RUN go mod download
-RUN go build -o /bin/grok-exporter
+## Statically link c like this so we don't need to download extra packages in alpine
+RUN go build -ldflags "-linkmode 'external' -extldflags '-static'" -o /bin/grok-exporter
 RUN git submodule update --init --recursive
+RUN go test ./... --race
 
-FROM  gcr.io/distroless/base:nonroot
+FROM  scratch
 
 USER 65532:65532
 COPY --from=builder /go/src/github.com/fstab/grok_exporter/logstash-patterns-core/patterns /patterns
