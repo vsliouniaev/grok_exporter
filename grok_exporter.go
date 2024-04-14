@@ -22,12 +22,13 @@ import (
 	"time"
 
 	"github.com/fstab/grok_exporter/config"
-	"github.com/fstab/grok_exporter/config/v3"
+	v3 "github.com/fstab/grok_exporter/config/v3"
 	"github.com/fstab/grok_exporter/exporter"
 	"github.com/fstab/grok_exporter/oniguruma"
 	"github.com/fstab/grok_exporter/tailer"
 	"github.com/fstab/grok_exporter/tailer/fswatcher"
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/collectors"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/sirupsen/logrus"
 )
@@ -37,6 +38,7 @@ var (
 	configPath             = flag.String("config", "", "Path to the config file. Try '-config ./example/config.yml' to get started.")
 	showConfig             = flag.Bool("showconfig", false, "Print the current configuration to the console. Example: 'grok_exporter -showconfig -config ./example/config.yml'")
 	disableExporterMetrics = flag.Bool("disable-exporter-metrics", false, "If this flag is set, the metrics about the exporter itself (go_*, process_*, promhttp_*) will be excluded from /metrics")
+	debug                  = flag.Bool("log-debug", false, "If true enables debug logging")
 )
 
 var (
@@ -74,8 +76,8 @@ func main() {
 	registry := prometheus.NewRegistry()
 	if !*disableExporterMetrics {
 		// init like the default registry, see client_golang/prometheus/registry.go init()
-		registry.MustRegister(prometheus.NewProcessCollector(prometheus.ProcessCollectorOpts{}))
-		registry.MustRegister(prometheus.NewGoCollector())
+		registry.MustRegister(collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
+		registry.MustRegister(collectors.NewGoCollector())
 	}
 	patterns, err := initPatterns(cfg)
 	exitOnError(err)
@@ -86,7 +88,7 @@ func main() {
 	}
 	nLinesTotal, nMatchesByMetric, procTimeMicrosecondsByMetric, nErrorsByMetric := initSelfMonitoring(metrics, registry)
 
-	tail, err := startTailer(cfg, registry)
+	tail, err := startTailer(cfg, registry, *debug)
 	exitOnError(err)
 
 	// gather up the handlers with which to start the webserver
@@ -329,13 +331,17 @@ func startServer(cfg v3.ServerConfig, httpHandlers []exporter.HttpServerPathHand
 	return serverErrors
 }
 
-func startTailer(cfg *v3.Config, registry prometheus.Registerer) (fswatcher.FileTailer, error) {
+func startTailer(cfg *v3.Config, registry prometheus.Registerer, debug bool) (fswatcher.FileTailer, error) {
 	var (
 		tail fswatcher.FileTailer
 		err  error
 	)
 	logger := logrus.New()
-	logger.Level = logrus.WarnLevel
+	if debug {
+		logger.Level = logrus.DebugLevel
+	} else {
+		logger.Level = logrus.WarnLevel
+	}
 	switch {
 	case cfg.Input.Type == "file":
 		if cfg.Input.PollInterval == 0 {
